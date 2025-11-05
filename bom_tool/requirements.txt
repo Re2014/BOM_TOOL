@@ -1,4 +1,5 @@
 flask
 openpyxl
 pdfplumber
+xlrd
 gunicorn
