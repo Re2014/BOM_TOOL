@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>インテリジェントBOM変換ツールV2 (Python版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <script>
+        // ページのちらつきを防ぐため、CSS変数をここで設定します
+        try {
+            const storedTheme = localStorage.getItem('bomTheme');
+            if (storedTheme) {
+                const { start, end } = JSON.parse(storedTheme);
+                document.documentElement.style.setProperty('--bg-grad-start', start);
+                document.documentElement.style.setProperty('--bg-grad-end', end);
+            } else {
+                // デフォルトを緑テーマにします (CSS側と合わせる)
+                document.documentElement.style.setProperty('--bg-grad-start', '#43C6AC');
+                document.documentElement.style.setProperty('--bg-grad-end', '#191654');
+            }
+        } catch (e) {
+            console.error('Failed to load theme from localStorage', e);
+            document.documentElement.style.setProperty('--bg-grad-start', '#43C6AC');
+            document.documentElement.style.setProperty('--bg-grad-end', '#191654');
+        }
+    </script>
+
+    <style>
+        :root {
+            /* デフォルトのグラデーション色を「緑/紺」にしています */
+            --bg-grad-start: #004aad;
+            --bg-grad-end: #cb6ce6;
+        }
+
+        body { 
+            font-family: 'Inter', 'Noto Sans JP', sans-serif; 
+            background: linear-gradient(90deg, var(--bg-grad-start), var(--bg-grad-end)); 
+            background-attachment: fixed; 
+        }
+        /* (...他のCSSは省略...) */
+        .glass-panel { background: rgba(255, 255, 255, 0.2); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+        .drop-zone.drag-over { border-color: rgba(255, 255, 255, 0.5); background-color: rgba(255, 255, 255, 0.3); }
+        .file-select-button { background: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.4); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); padding: 10px 20px; border-radius: 9999px; font-weight: 600; cursor: pointer; transition: all 0.2s ease-in-out; }
+        .file-select-button:hover { background: rgba(255, 255, 255, 0.3); }
+        .action-button { background-color: #4f46e5; border: none; color: white; padding: 10px 20px; text-align: center; text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem; font-size: 14px; border-radius: 8px; cursor: pointer; transition: background-color 0.3s ease; }
+        .action-button:hover { background-color: #4338ca; }
+        .download-button { background-color: #4CAF50; border: none; color: white; padding: 8px 16px; text-align: center; text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem; font-size: 14px; border-radius: 8px; cursor: pointer; transition: background-color 0.3s ease; }
+        .download-button:hover { background-color: #45a049; }
+        .sheet-checkbox-label { display: flex; align-items: center; padding: 8px 12px; background: rgba(255,255,255,0.1); border-radius: 6px; cursor: pointer; transition: background 0.2s; }
+        .sheet-checkbox-label:hover { background: rgba(255,255,255,0.2); }
+        .sheet-checkbox { width: 1.25rem; height: 1.25rem; border-radius: 4px; background-color: rgba(255,255,255,0.3); border: none; }
+        .sheet-checkbox:checked { background-color: #4f46e5; }
+        #result-section h2, #result-section #result-count, #file-info p { color: white; text-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        #result-section table thead { background: rgba(255, 255, 255, 0.15); }
+        #result-section table th, #result-section table td { color: #f3f4f6; }
+        #result-section .border, #result-section .divide-y > :not([hidden]) ~ :not([hidden]) { border-color: rgba(255, 255, 255, 0.2) !important; }
+        .spinner { border: 4px solid rgba(255, 255, 255, 0.2); width: 36px; height: 36px; border-radius: 50%; border-left-color: #fff; animation: spin 1s ease infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .preview-tab { padding: 10px 16px; cursor: pointer; border-bottom: 3px solid transparent; color: #e5e7eb; font-weight: 500; transition: all 0.2s ease; }
+        .preview-tab:hover { background: rgba(255, 255, 255, 0.1); }
+        .preview-tab.active { color: #ffffff; font-weight: 600; border-bottom-color: #4f46e5; }
+        .theme-dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.5); cursor: pointer; transition: transform 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .theme-dot:hover { transform: scale(1.1); }
+    </style>
+</head>
+<body>
+    <div class="absolute top-4 right-4 flex space-x-2 z-10">
+        <button class="theme-dot" data-start="#004aad" data-end="#cb6ce6" style="background: linear-gradient(90deg, #004aad, #cb6ce6);"></button>
+        <button class="theme-dot" data-start="#191654" data-end="#43C6AC" style="background: linear-gradient(90deg, #191654, #43C6AC);"></button>
+        <button class="theme-dot" data-start="#012bd0" data-end="#83d8ee" style="background: linear-gradient(90deg, #012bd0, #83d8ee);"></button>
+        <button class="theme-dot" data-start="#232526" data-end="#414345" style="background: linear-gradient(90deg, #232526, #414345);"></button>
+    </div>
+
+    <div class="container mx-auto p-4 md:p-8 max-w-7xl relative">
+        <header>
+            <h1 class="text-2xl md:text-3xl font-bold text-white" style="text-shadow: 0 2px 4px rgba(0,0,0,0.4);">インテリジェントBOM変換ツール</h1>
+            <p class="text-sm md:text-base text-gray-200 mt-1" style="text-shadow: 0 1px 3px rgba(0,0,0,0.4);">多様なBOMを解釈し、取り消し線のある部品を除去します。</p>
+        </header>
+        <main class="mt-6">
+            <section id="upload-section">
+                <div id="drop-zone" class="glass-panel flex flex-col items-center justify-center p-10 text-center cursor-pointer min-h-[300px]">
+                    <p class="text-white font-medium text-xl md:text-2xl mb-2">ここにファイルをドラッグ＆ドロップ</p>
+                    <p class="text-white text-md mt-1">対応形式: XLSX, XLS, CSV, TXT, PDF</p>
+                    <input type="file" id="file-input" class="hidden" accept=".xlsx,.xls,.csv,.txt,.pdf">
+                    <button id="file-select-button" class="file-select-button mt-6">ファイルを選択</button>
+                </div>
+                 <div id="file-info" class="hidden mt-4 text-center">
+                    <p>選択されたファイル: <span id="file-name" class="font-semibold"></span></p>
+                </div>
+            </section>
+            
+            <section id="options-section" class="hidden mt-4 glass-panel p-4">
+                <div class="flex items-center">
+                    <label class="sheet-checkbox-label text-white text-sm flex-1">
+                        <input type="checkbox" id="remove-parentheses" class="sheet-checkbox mr-2" checked>
+                        部品番号の括弧 () を削除して正規化する
+                    </label>
+                </div>
+            </section>
+            
+            <section id="sheet-selection-section" class="hidden mt-6 glass-panel p-6">
+                <h2 class="text-xl font-bold text-white mb-4">処理するシートを選択してください</h2>
+                <div id="sheet-checkboxes-container" class="space-y-2 max-h-48 overflow-y-auto">
+                    </div>
+                <div class="flex justify-between items-center mt-4">
+                    <label class="sheet-checkbox-label text-white text-sm">
+                        <input type="checkbox" id="select-all-sheets" class="sheet-checkbox mr-2">
+                        すべて選択 / 解除
+                    </label>
+                    <button id="process-excel-btn" class="action-button">選択したシートを処理</button>
+                </div>
+            </section>
+            
+            <section id="status-section" class="hidden mt-6 text-center">
+                <div id="loading-indicator" class="hidden items-center justify-center"><div class="spinner"></div><p id="status-text" class="ml-4 text-lg font-medium text-white"></p></div>
+                
+                <div id="error-message" class="hidden glass-panel p-4 text-red-100">
+                    <p class="font-bold text-red-50">エラー</p>
+                    <div class="max-h-32 overflow-y-auto text-left mt-2 bg-black/10 p-2 rounded">
+                        <p id="error-details" class="text-sm"></p>
+                    </div>
+                </div>
+            </section>
+            
+            <section id="result-section" class="hidden mt-6 glass-panel p-6">
+                <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                    <h2 class="text-xl font-bold">プレビュー</h2>
+                    <div class="flex items-center space-x-4">
+                        <span id="result-count" class="text-sm whitespace-nowrap"></span>
+                        <div class="flex items-center space-x-2">
+                            <button id="download-excel-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md flex items-center gap-2 text-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                Excel
+                            </button>
+                            <button id="download-csv-btn" class="download-button">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+
+                                CSV
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mb-4 border-b border-gray-200/20">
+                    <nav id="preview-tabs" class="flex flex-wrap -mb-px" aria-label="Tabs"></nav>
+                </div>
+                
+                <div id="warnings-container" class="hidden mb-4">
+                    </div>
+                
+                <div class="overflow-x-auto max-h-[50vh] border rounded-lg">
+                    <table class="min-w-full divide-y"><thead class="sticky top-0 backdrop-blur-sm"><tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase">部品番号</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase">部品型番</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase">メーカー</th>
+                    </tr></thead><tbody id="preview-tbody" class="divide-y"></tbody></table>
+                </div>
+                
+                <div id="individual-downloads-section" class="hidden mt-6">
+                    <h3 class="text-lg font-bold text-white mb-3">個別ダウンロード</h3>
+                    <div id="individual-downloads-links" class="flex flex-wrap gap-3">
+                        </div>
+                </div>
+                </section>
+        </main>
+    </div>
+
+    <script>
+        // DOM要素の取得
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileSelectButton = document.getElementById('file-select-button');
+        const fileInfo = document.getElementById('file-info');
+        const fileNameEl = document.getElementById('file-name');
+        const statusSection = document.getElementById('status-section');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const statusText = document.getElementById('status-text');
+        const errorMessage = document.getElementById('error-message');
+        const errorDetails = document.getElementById('error-details');
+        const resultSection = document.getElementById('result-section');
+        const resultCount = document.getElementById('result-count');
+        const previewTbody = document.getElementById('preview-tbody');
+        const downloadExcelBtn = document.getElementById('download-excel-btn');
+        const downloadCsvBtn = document.getElementById('download-csv-btn');
+        const sheetSelectionSection = document.getElementById('sheet-selection-section');
+        const sheetCheckboxesContainer = document.getElementById('sheet-checkboxes-container');
+        const selectAllSheets = document.getElementById('select-all-sheets');
+        
+        const previewTabsContainer = document.getElementById('preview-tabs'); // タブコンテナ
+        const individualDownloadsSection = document.getElementById('individual-downloads-section'); // 個別DLセクション(非表示用)
+        
+        const warningsContainer = document.getElementById('warnings-container'); // 警告エリアを追加
+
+        // 状態を保持する変数
+        let currentFile = null;
+        let fullDataset = {}; // combined と individual をすべて保持
+        let activePreviewTab = 'combined'; // 'combined' またはシート名
+        let lastSelectedSheets = null; // 最後に処理したシート一覧を保持
+
+        // --- 1. ファイル処理のメインロジック ---
+        async function handleFileSelect(file) {
+            if (!file) return;
+            resetUI();
+            currentFile = file;
+            fileNameEl.textContent = file.name;
+            fileInfo.classList.remove('hidden');
+            
+            document.getElementById('options-section').classList.remove('hidden');
+            
+            const fileExtension = file.name.split('.').pop().toLowerCase();
+            
+            if (fileExtension === 'xlsx' || fileExtension === 'xls') {
+                showStatus('Excelファイルを読み込み中...');
+                await parseExcelAndShowSheets(file);
+                loadingIndicator.style.display = 'none';
+                statusText.textContent = '処理するシートを選択してください。';
+            } else {
+                lastSelectedSheets = null; // Excel以外なのでシート選択はnull
+                await processFileOnServer(file, null);
+            }
+        }
+        
+        async function parseExcelAndShowSheets(file) {
+            try {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const data = e.target.result;
+                    const workbook = XLSX.read(data, {type: 'array'});
+                    const sheetNames = workbook.SheetNames;
+                    
+                    sheetCheckboxesContainer.innerHTML = '';
+                    sheetNames.forEach(name => {
+                        const checkboxId = `sheet-${name.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                        const label = document.createElement('label');
+                        label.className = 'sheet-checkbox-label text-white text-sm';
+                        label.htmlFor = checkboxId;
+                        label.innerHTML = `
+                            <input type="checkbox" id="${checkboxId}" value="${name}" class="sheet-checkbox mr-2" checked>
+                            ${name}
+                        `;
+                        sheetCheckboxesContainer.appendChild(label);
+                    });
+                    
+                    sheetSelectionSection.classList.remove('hidden');
+                };
+                reader.readAsArrayBuffer(file);
+            } catch (err) {
+                showError(`Excelファイルの読み込みに失敗しました: ${err.message}`);
+            }
+        }
+        
+        async function processFileOnServer(file, selectedSheets) {
+            lastSelectedSheets = selectedSheets; // 実行時のシート選択をグローバルに保存
+            
+            resetUI(true);
+            showStatus('サーバーでファイルを処理中...');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            if (selectedSheets) {
+                formData.append('sheets', JSON.stringify(selectedSheets));
+            }
+
+            const removeParentheses = document.getElementById('remove-parentheses').checked;
+            formData.append('remove_parentheses', removeParentheses);
+
+            try {
+                const response = await fetch('/process', { method: 'POST', body: formData });
+
+                // サーバーがOK (200番台) を返さなかった場合
+                if (!response.ok) {
+                    let errorMsg = `サーバーエラー: ${response.status} ${response.statusText}`; // デフォルトエラー
+                    try {
+                        // サーバーから { "error": "..." } 形式のJSONが返されているか試す
+                        const errorData = await response.json();
+                        if (errorData && errorData.error) {
+                            errorMsg = errorData.error; // サーバーからの具体的なエラーを採用
+                        }
+                    } catch (e) {
+                        // response.json() が失敗した場合 (応答がJSONではない = HTMLエラーページなど)
+                        // errorMsg はデフォルトのまま
+                        console.error('Failed to parse error response as JSON', e);
+                    }
+                    // 確実に Error を throw して catch ブロックに送る
+                    throw new Error(errorMsg);
+                }
+
+                // response.ok が true の場合のみ、安全に .json() を呼び出す
+                const data = await response.json();
+                
+                // データチェックを data.combined.data に対して行う
+                if (!data.combined || !data.combined.data || data.combined.data.length === 0) {
+                    throw new Error('有効なデータが見つかりませんでした。');
+                }
+                
+                
+                // サーバーからのレスポンス (data と warnings を含む) をすべて保持
+                fullDataset = {
+                    combined: data.combined,
+                    individual: data.individual
+                };
+                
+                activePreviewTab = 'combined'; // デフォルトは結合
+                
+                // タブを描画
+                renderTabs(data.individual);
+                
+                // デフォルトのプレビュー（結合）を描画 (data と warnings を渡す)
+                renderPreview(data.combined.data, data.combined.warnings);
+                
+                statusSection.classList.add('hidden');
+                resultSection.classList.remove('hidden');
+                individualDownloadsSection.classList.add('hidden'); // 個別ダウンロードセクションは使わない
+                
+            } catch (err) {
+                showError(err.message);
+                console.error(err);
+            }
+        }
+
+        // --- 2. UI描画関連 ---
+        
+        // (★ JavaScript: 警告リストをスクロール対応 ★)
+        const renderPreview = (data, warnings) => {
+            // 1. テーブルの描画
+            previewTbody.innerHTML='';
+            const fragment = document.createDocumentFragment();
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-6 py-4 text-sm max-w-lg break-all">${row.ref || ''}</td>
+                    <td class="px-6 py-4 text-sm whitespace-nowrap">${row.part || ''}</td>
+                    <td class="px-6 py-4 text-sm whitespace-nowrap">${row.mfg || ''}</td>
+                `;
+                fragment.appendChild(tr);
+            });
+            previewTbody.appendChild(fragment);
+
+            // 2. 件数表示の更新
+            if (activePreviewTab === 'combined') {
+                 resultCount.textContent = `${data.length} 件のデータを集約しました。`;
+            } else {
+                 resultCount.textContent = `[${activePreviewTab}] ${data.length} 件のデータ`;
+            }
+            
+            // 3. 警告の描画 (▼▼▼ 修正 ▼▼▼)
+            warningsContainer.innerHTML = '';
+            if (warnings && warnings.length > 0) {
+                const warningHeader = document.createElement('p');
+                warningHeader.className = 'font-bold text-yellow-300';
+                warningHeader.textContent = '以下の警告があります:';
+                warningsContainer.appendChild(warningHeader);
+                
+                // スクロール用のコンテナDIVを作成
+                const scrollDiv = document.createElement('div');
+                scrollDiv.className = 'max-h-32 overflow-y-auto text-left mt-2 bg-black/10 p-2 rounded'; // スクロールと高さ制限
+                
+                const warningList = document.createElement('ul');
+                warningList.className = 'list-disc list-inside text-yellow-200 text-sm'; // 元のスタイルから bg/p-2/rounded を削除
+                warnings.forEach(msg => {
+                    const li = document.createElement('li');
+                    li.textContent = msg;
+                    warningList.appendChild(li);
+                });
+                
+                scrollDiv.appendChild(warningList); // ul を scrollDiv に追加
+                warningsContainer.appendChild(scrollDiv); // scrollDiv をメインコンテナに追加
+                
+                warningsContainer.classList.remove('hidden');
+            } else {
+                warningsContainer.classList.add('hidden');
+            }
+        };
+        // (★ 修正ここまで ★)
+        
+        function renderTabs(individualData) {
+            previewTabsContainer.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+
+            const combinedTab = document.createElement('button');
+            combinedTab.className = 'preview-tab active';
+            combinedTab.textContent = '結合';
+            combinedTab.dataset.tabKey = 'combined';
+            combinedTab.addEventListener('click', () => switchPreviewTab('combined'));
+            fragment.appendChild(combinedTab);
+
+            const sheetNames = Object.keys(individualData);
+            sheetNames.forEach(sheetName => {
+                // data.data が存在するかチェック
+                if (!individualData[sheetName] || individualData[sheetName].error || !individualData[sheetName].data || individualData[sheetName].data.length === 0) return;
+                
+                const sheetTab = document.createElement('button');
+                sheetTab.className = 'preview-tab';
+                sheetTab.textContent = sheetName;
+                sheetTab.dataset.tabKey = sheetName;
+                sheetTab.addEventListener('click', () => switchPreviewTab(sheetName));
+                fragment.appendChild(sheetTab);
+            });
+            
+            previewTabsContainer.appendChild(fragment);
+        }
+        
+        function switchPreviewTab(tabKey) {
+            if (tabKey === activePreviewTab) return;
+
+            activePreviewTab = tabKey;
+            
+            previewTabsContainer.querySelectorAll('.preview-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.tabKey === tabKey);
+            });
+            
+            let dataToPreview;
+            let warningsToPreview; // 警告も取得
+            
+            if (tabKey === 'combined') {
+                dataToPreview = fullDataset.combined.data || [];
+                warningsToPreview = fullDataset.combined.warnings || [];
+            } else {
+                dataToPreview = fullDataset.individual[tabKey].data || [];
+                warningsToPreview = fullDataset.individual[tabKey].warnings || [];
+            }
+            
+            // 警告も渡す
+            renderPreview(dataToPreview, warningsToPreview);
+        }
+        
+        const resetUI = (keepFileInfo = false) => {
+            if (!keepFileInfo) {
+                fileInfo.classList.add('hidden');
+                fileInput.value = '';
+                currentFile = null;
+                fileNameEl.textContent = '';
+                document.getElementById('options-section').classList.add('hidden');
+                
+                // lastSelectedSheets はファイルがリセットされる時だけリセット
+                lastSelectedSheets = null; 
+            }
+            statusSection.classList.add('hidden');
+            resultSection.classList.add('hidden');
+            sheetSelectionSection.classList.add('hidden');
+            individualDownloadsSection.classList.add('hidden');
+            previewTbody.innerHTML = '';
+            sheetCheckboxesContainer.innerHTML = '';
+            previewTabsContainer.innerHTML = '';
+            
+            // 警告エリアもリセット
+            warningsContainer.innerHTML = '';
+            warningsContainer.classList.add('hidden');
+            
+            fullDataset = {};
+            activePreviewTab = 'combined';
+        };
+        
+        const showStatus = (message) => {
+            statusSection.classList.remove('hidden');
+            loadingIndicator.style.display = 'flex';
+            statusText.textContent = message;
+            errorMessage.classList.add('hidden');
+            resultSection.classList.add('hidden');
+            sheetSelectionSection.classList.add('hidden');
+        };
+        
+        const showError = (details) => {
+            statusSection.classList.remove('hidden');
+            loadingIndicator.style.display = 'none';
+            errorMessage.classList.remove('hidden');
+            errorDetails.textContent = details;
+            resultSection.classList.add('hidden');
+            sheetSelectionSection.classList.add('hidden');
+        };
+
+        // --- 3. ダウンロードヘルパー関数 ---
+        async function handleDownload(format) {
+            if (!fullDataset || !activePreviewTab) return;
+
+            // 1. 保存するデータを取得 ( .data を参照)
+            const data = activePreviewTab === 'combined'
+                ? fullDataset.combined.data
+                : fullDataset.individual[activePreviewTab].data;
+            
+            if (!data || data.length === 0) {
+                alert('保存するデータがありません。');
+                return;
+            }
+            
+            // 2. pywebview API (デスクトップ版) が使えるかチェック
+            if (window.pywebview && window.pywebview.api) {
+                try {
+                    // 3. データをJSON文字列に変換
+                    const dataJson = JSON.stringify(data);
+                    
+                    // 4. Python側の 'save_file_dialog' 関数を呼び出す
+                    const result = await window.pywebview.api.save_file_dialog(dataJson, format);
+                    
+                    if (result.status === 'success') {
+                        console.log('File saved to:', result.path);
+                    } else if (result.status === 'error') {
+                        alert(`ファイルの保存に失敗しました: ${result.message}`);
+                    }
+                    // 'cancelled' の場合は何もしない
+                    
+                } catch (e) {
+                    alert(`ダウンロード処理の呼び出しに失敗しました: ${e}`);
+                }
+            } else {
+                // 5. Webブラウザ版 (pywebviewがない場合) の処理
+                if (format === 'excel') {
+                    // 元の downloadAsExcel の処理
+                    const dataToExport = data.map(row => ({ '部品番号': row.ref, '部品型番': row.part, 'メーカー': row.mfg }));
+                    const ws = XLSX.utils.json_to_sheet(dataToExport);
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, 'BOM');
+                    XLSX.writeFile(wb, `${activePreviewTab}_converted.xlsx`);
+                } else if (format === 'csv') {
+                    // 元の downloadAsCsv の処理
+                    const header = ['部品番号', '部品型番', 'メーカー'];
+                    const rows = data.map(row => 
+                        [row.ref, row.part, row.mfg].map(cell => {
+                            const cellStr = String(cell || '');
+                            if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                                return `"${cellStr.replace(/"/g, '""')}"`;
+                            }
+                            return cellStr;
+                        }).join(',')
+                    );
+                    const csvContent = [header.join(','), ...rows].join('\n');
+                    const bom = new Uint8Array([0xEF, 0xBB, 0xBF]); // BOM付きUTF-8
+                    const blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", url);
+                    link.setAttribute("download", `${activePreviewTab}_converted.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                }
+            }
+        }
+        
+
+        // --- 4. イベントリスナー設定 ---
+        fileSelectButton.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) handleFileSelect(file);
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file) handleFileSelect(file);
+        });
+
+        selectAllSheets.addEventListener('change', () => {
+            const checkboxes = sheetCheckboxesContainer.querySelectorAll('.sheet-checkbox');
+            checkboxes.forEach(cb => cb.checked = selectAllSheets.checked);
+        });
+
+        document.getElementById('process-excel-btn').addEventListener('click', async () => {
+            const selectedSheets = Array.from(
+                sheetCheckboxesContainer.querySelectorAll('.sheet-checkbox:checked')
+            ).map(cb => cb.value);
+
+            if (selectedSheets.length === 0) {
+                alert('少なくとも1つのシートを選択してください。');
+                return;
+            }
+
+            await processFileOnServer(currentFile, selectedSheets);
+        });
+
+        // ダウンロードボタン
+        downloadExcelBtn.addEventListener('click', () => {
+            handleDownload('excel'); // 'excel' を指定
+        });
+
+        downloadCsvBtn.addEventListener('click', () => {
+            handleDownload('csv'); // 'csv' を指定
+        });
+
+        // (★ テーマ変更リスナー ★)
+        document.querySelectorAll('.theme-dot').forEach(dot => {
+            dot.addEventListener('click', () => {
+                const start = dot.dataset.start;
+                const end = dot.dataset.end;
+                document.documentElement.style.setProperty('--bg-grad-start', start);
+                document.documentElement.style.setProperty('--bg-grad-end', end);
+                localStorage.setItem('bomTheme', JSON.stringify({ start, end }));
+            });
+        });
+        
+        // (★ 括弧削除オプション変更リスナー ★)
+        document.getElementById('remove-parentheses').addEventListener('change', () => {
+            // ファイルが選択されており、かつ一度処理が成功している場合のみ再処理
+            if (currentFile && fullDataset.combined && fullDataset.combined.data) {
+                // 最後に使ったシートセレクション (Excel以外ならnull) を使ってサーバーに再リクエスト
+                processFileOnServer(currentFile, lastSelectedSheets);
+            }
+        });
+    </script>
+</body>
+</html>
