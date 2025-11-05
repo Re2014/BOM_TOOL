@@ -2,12 +2,14 @@
 import re
 import csv
 import pdfplumber
+import xlrd # (★ 1. xlrd をインポート)
 
 # --- 自作モジュールからインポート ---
 from utils import ref_pattern
 
 # --- rich_text=True モードで読み込んだExcelセルを処理する ---
 def parse_single_excel_sheet_rich_text(sheet):
+    # ... (この関数 (parse_single_excel_sheet_rich_text) は変更なし) ...
     data = []
     cancellation_refs = set()
     
@@ -53,8 +55,52 @@ def parse_single_excel_sheet_rich_text(sheet):
         
     return data, cancellation_refs
 
+# (★ 2. 以下に .xls 用の新しい関数を追加 ★)
+
+# --- xlrd (.xls) 用のパーサー ---
+def parse_single_excel_sheet_xls(sheet, book):
+    data = []
+    cancellation_refs = set()
+    
+    # book からフォントリストを取得 (formatting_info=True で開かれている前提)
+    fonts = book.font_list
+    
+    for r_idx in range(sheet.nrows):
+        row_data = []
+        
+        for c_idx in range(sheet.ncols):
+            cell = sheet.cell(r_idx, c_idx)
+            
+            # 1. セルの値を取得
+            cell_full_text = str(cell.value)
+            row_data.append(cell_full_text)
+
+            # 2. 取り消し線チェック (セル全体のみ)
+            cell_is_struck = False
+            if fonts:
+                try:
+                    xf = book.xf_list[cell.xf_index]
+                    font = fonts[xf.font_index]
+                    if font.struck_out:
+                        cell_is_struck = True
+                except Exception as e:
+                    # フォーマット情報の取得に失敗した場合は無視
+                    pass 
+            
+            if cell_is_struck:
+                # セル全体が取り消し線の場合
+                found_refs = ref_pattern.findall(cell_full_text)
+                for ref in found_refs:
+                    cancellation_refs.add(ref)
+        
+        data.append(row_data)
+        
+    return data, cancellation_refs
+
+
 # --- CSV / TXT パーサー ---
 def parse_csv_or_txt(file_stream, delimiters):
+    # ... (変更なし) ...
     file_stream.seek(0)
     try: text_data = file_stream.read().decode('utf-8')
     except UnicodeDecodeError:
@@ -80,6 +126,7 @@ def parse_csv_or_txt(file_stream, delimiters):
 
 # --- PDF パーサー ---
 def parse_pdf(file_stream):
+    # ... (変更なし) ...
     data_2d = []
     with pdfplumber.open(file_stream) as pdf:
         for page in pdf.pages:
