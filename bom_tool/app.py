@@ -4,12 +4,14 @@ import openpyxl
 import json
 import io
 import traceback
+import xlrd # (★ 1. xlrd をインポート)
 
 # --- 自作モジュールをインポート ---
 from file_parsers import (
     parse_single_excel_sheet_rich_text,
     parse_csv_or_txt,
-    parse_pdf
+    parse_pdf,
+    parse_single_excel_sheet_xls # (★ 2. 新しいパーサーをインポート)
 )
 from bom_processor import (
     extract_flat_list_from_rows,
@@ -48,9 +50,11 @@ def process_file_endpoint():
     remove_parentheses = request.form.get('remove_parentheses', 'true') == 'true'
     
     all_flat_data = []
+    all_cancellation_warnings = set()
     individual_results = {}
     
     try:
+        # (★ 3. if文を .xlsx と .xls で分岐させる ★)
         if filename.endswith(('.xlsx', '.xls')):
             selected_sheets_json = request.form.get('sheets', '[]')
             selected_sheets = json.loads(selected_sheets_json)
@@ -58,32 +62,69 @@ def process_file_endpoint():
             if not selected_sheets:
                 return jsonify({"error": "処理するシートが選択されていません。"}), 400
 
-            try:
-                workbook = openpyxl.load_workbook(in_memory_file, rich_text=True)
-            except Exception as e:
-                print(traceback.format_exc())
-                return jsonify({"error": f"Excelファイルの読み込みに失敗しました。サポートされている .xlsx 形式か確認してください。 (エラー: {e})"}), 500
-            
-            for sheet_name in selected_sheets:
-                if sheet_name not in workbook.sheetnames:
-                    individual_results[sheet_name] = {"error": "指定されたシートが見つかりません。"}
-                    continue
+            # --- .xlsx (openpyxl) の処理 ---
+            if filename.endswith('.xlsx'):
+                try:
+                    workbook = openpyxl.load_workbook(in_memory_file, rich_text=True)
+                except Exception as e:
+                    print(traceback.format_exc())
+                    return jsonify({"error": f"Excel (.xlsx) ファイルの読み込みに失敗しました。 (エラー: {e})"}), 500
                 
-                sheet = workbook[sheet_name]
+                for sheet_name in selected_sheets:
+                    if sheet_name not in workbook.sheetnames:
+                        individual_results[sheet_name] = {"error": "指定されたシートが見つかりません。"}
+                        continue
+                    
+                    sheet = workbook[sheet_name]
+                    
+                    # 既存の .xlsx パーサーを呼ぶ
+                    data_2d, cancellation_refs = parse_single_excel_sheet_rich_text(sheet)
+                    
+                    # (以降の処理は .xls と共通)
+                    flat_list, error, cancellation_warnings_list = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
+                    
+                    if error:
+                        individual_results[sheet_name] = {"error": error}
+                    else:
+                        final_data, duplicate_warnings = group_and_finalize_bom(flat_list)
+                        total_warnings = duplicate_warnings + cancellation_warnings_list
+                        individual_results[sheet_name] = {"data": final_data, "warnings": total_warnings}
+                        all_flat_data.extend(flat_list)
+                        all_cancellation_warnings.update(cancellation_warnings_list)
+
+            # --- .xls (xlrd) の処理 ---
+            elif filename.endswith('.xls'):
+                in_memory_file.seek(0)
+                file_contents = in_memory_file.read()
                 
-                data_2d, cancellation_refs = parse_single_excel_sheet_rich_text(sheet)
-                flat_list, error = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
+                try:
+                    # formatting_info=True で取り消し線情報を取得
+                    book = xlrd.open_workbook(file_contents=file_contents, formatting_info=True, on_demand=True)
+                except Exception as e:
+                    print(traceback.format_exc())
+                    return jsonify({"error": f".xlsファイルの読み込みに失敗しました。 (エラー: {e})"}), 500
                 
-                if error:
-                    individual_results[sheet_name] = {"error": error}
-                else:
-                    # ▼▼▼ 変更 ▼▼▼
-                    # group_and_finalize_bom は (data, warnings) のタプルを返すようになった
-                    final_data, warnings = group_and_finalize_bom(flat_list)
-                    # データを { "data": ..., "warnings": ... } の辞書型で格納
-                    individual_results[sheet_name] = {"data": final_data, "warnings": warnings}
-                    # ▲▲▲ 変更ここまで ▲▲▲
-                    all_flat_data.extend(flat_list)
+                for sheet_name in selected_sheets:
+                    try:
+                        sheet = book.sheet_by_name(sheet_name)
+                    except xlrd.XLRDError:
+                        individual_results[sheet_name] = {"error": "指定されたシートが見つかりません。"}
+                        continue
+                    
+                    # 新しい .xls パーサーを呼ぶ
+                    data_2d, cancellation_refs = parse_single_excel_sheet_xls(sheet, book)
+
+                    # (以降の処理は .xlsx と共通)
+                    flat_list, error, cancellation_warnings_list = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
+                    
+                    if error:
+                        individual_results[sheet_name] = {"error": error}
+                    else:
+                        final_data, duplicate_warnings = group_and_finalize_bom(flat_list)
+                        total_warnings = duplicate_warnings + cancellation_warnings_list
+                        individual_results[sheet_name] = {"data": final_data, "warnings": total_warnings}
+                        all_flat_data.extend(flat_list)
+                        all_cancellation_warnings.update(cancellation_warnings_list)
 
         else:
             # Excel以外のファイル（PDF, CSV, TXT）の処理
@@ -100,28 +141,26 @@ def process_file_endpoint():
 
             if not data_2d: return jsonify({"error": "ファイルからデータを抽出できませんでした。"}), 500
             
-            flat_list, error = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
+            flat_list, error, cancellation_warnings_list = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
             if error: return jsonify({"error": error}), 500
             
             all_flat_data.extend(flat_list)
-            individual_results = {} # Excel以外は individual を使わない
+            all_cancellation_warnings.update(cancellation_warnings_list)
+            individual_results = {}
 
-        # ▼▼▼ 最終集計を呼び出し (変更) ▼▼▼
-        # combined_results も (data, warnings) のタプルを受け取る
-        combined_data, combined_warnings = group_and_finalize_bom(all_flat_data)
+        # 最終集計
+        combined_data, combined_duplicate_warnings = group_and_finalize_bom(all_flat_data)
+        combined_total_warnings = combined_duplicate_warnings + sorted(list(all_cancellation_warnings))
         
-        # データの有無チェック (data部分を見る)
         if not combined_data:
              print("--- [DEBUG] エラー: 最終集計データが空です ---")
              return jsonify({"error": "有効なデータが見つかりませんでした。"}), 500
 
         print("--- [DEBUG] 処理成功。JSONを返します ---")
         return jsonify({
-            # combined も { "data": ..., "warnings": ... } の辞書型で返す
-            "combined": {"data": combined_data, "warnings": combined_warnings},
+            "combined": {"data": combined_data, "warnings": combined_total_warnings},
             "individual": individual_results
         })
-        # ▲▲▲ 変更ここまで ▲▲▲
         
     except Exception as e:
         print("--- [DEBUG] 処理中に 'except' ブロックでエラーが発生しました ---")
