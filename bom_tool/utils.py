@@ -8,7 +8,7 @@ ref_range_pattern = re.compile(r'^([A-Z]+)(\d+)\s*[-~～ー]\s*([A-Z]*)(\d+)$', 
 # --- キーワード ---認識されない列があった場合ここに列名を追加することで認識される場合があります。
 HEADER_KEYWORDS = {
     'ref': ['部品番号', 'ref des', 'ロケーション番号', 'ref', '記号', 'designator', 'symbol', 'リファレンス', '回路記号', '位置番号', '部品記号','デバイス番号'],
-    'part': ['part number', 'メーカー品番', '型番', '型式', '形式', '型格', '定格', 'part', 'value', '品名', 'description', '図番', '名称', 'パート名'],
+    'part': ['part number', 'メーカー品番', '型番', '型式', '形式', '型格', '定格', 'part', 'value', '品名', 'description', '図番', '名称', 'パート名','識別符号'],
     'mfg': ['メーカー', 'mfg', 'maker', 'manufacturer', '製造元']
 }
 
@@ -25,4 +25,5 @@ def detect_manufacturer(part_number_string):
     if 'rohm' in pn_lower: return 'Rohm'
     if 'yageo' in pn_lower: return 'Yageo'
     if 'kyocera' in pn_lower: return 'Kyocera'
+
     return ""
