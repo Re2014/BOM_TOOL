@@ -495,7 +495,11 @@
                     const dataToExport = data.map(row => ({ '部品番号': row.ref, '部品型番': row.part, 'メーカー': row.mfg }));
                     const ws = XLSX.utils.json_to_sheet(dataToExport);
                     const wb = XLSX.utils.book_new();
-                    XISX.utils.book_append_sheet(wb, ws, 'BOM');
+                    
+                    // ▼▼▼ ここが修正された箇所です (XISX -> XLSX) ▼▼▼
+                    XLSX.utils.book_append_sheet(wb, ws, 'BOM');
+                    // ▲▲▲ 修正ここまで ▲▲▲
+                    
                     XLSX.writeFile(wb, `${activePreviewTab}_converted.xlsx`);
                 } else if (format === 'csv') {
                     // 元の downloadAsCsv の処理
